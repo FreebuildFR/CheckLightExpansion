@@ -1,25 +1,17 @@
 package fr.freebuild.papi.expansion.checklight;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.List;
-
+import me.clip.placeholderapi.expansion.PlaceholderExpansion;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
-import me.clip.placeholderapi.expansion.PlaceholderExpansion;
+import java.util.ArrayList;
+import java.util.List;
 
 public class CheckLightExpansion extends PlaceholderExpansion {
 
-  private String craftItemStackPath;
-
-
   public CheckLightExpansion() {
-    String version = Bukkit.getServer().getClass().getPackage().getName().split("\\.")[3];
-    this.craftItemStackPath = "org.bukkit.craftbukkit." + version + ".inventory.CraftItemStack";
   }
 
   @Override
@@ -34,7 +26,7 @@ public class CheckLightExpansion extends PlaceholderExpansion {
 
   @Override
   public String getVersion() {
-    return "1.0.0";
+    return "1.1.0";
   }
 
   private class ParsingFailedException extends Exception {
@@ -88,11 +80,11 @@ public class CheckLightExpansion extends PlaceholderExpansion {
     Integer remaining = amount;
     List<ItemStack> toDelete = new ArrayList<>();
 
-    for (int i = 0; i < contents.length && remaining > 0;  i++) {
-      ItemStack item = contents[i];
+    try {
+      for (int i = 0; i < contents.length && remaining > 0;  i++) {
+        ItemStack item = contents[i];
 
-      if(item != null && item.getType() == Material.LIGHT) {
-        try {
+        if(item != null && item.getType() == Material.LIGHT) {
           Integer lightLevel = getNbtLevel(item);
           if (levels.stream().anyMatch(level -> lightLevel == level)) {
             Integer amountToRemove = Math.min(remaining, item.getAmount());
@@ -101,17 +93,18 @@ public class CheckLightExpansion extends PlaceholderExpansion {
             itemToDelete.setAmount(amountToRemove);
             toDelete.add(itemToDelete);
           }
-        } catch (Exception e) {
-          e.printStackTrace();
         }
       }
-    }
 
-    if (remove && remaining <= 0) {
-      toDelete.forEach(it -> player.getInventory().removeItem(it));
-    }
+      if (remove && remaining <= 0) {
+        toDelete.forEach(it -> player.getInventory().removeItem(it));
+      }
 
-    return (remaining > 0) ? "no" : "yes";
+      return (remaining > 0) ? "no" : "yes";
+    } catch (Exception e) {
+      e.printStackTrace();
+      return e.getMessage();
+    }
   }
 
   private Integer parseIntArg(String arg, String name, Integer start, Integer end) throws ParsingFailedException {
@@ -133,41 +126,31 @@ public class CheckLightExpansion extends PlaceholderExpansion {
     }
   }
 
+
+  /**
+   * NB : With Paper NmsApi is not obfuscate
+   */
   private Integer getNbtLevel(ItemStack itemStack) throws Exception {
-    Method asNMSCopy = Class.forName(this.craftItemStackPath).getDeclaredMethod("asNMSCopy", ItemStack.class);
-    Object nmsItemStack = asNMSCopy.invoke(null, itemStack);
+    // org.bukkit.craftbukkit.inventory.CraftItemStack.asNmsCopy (/!\ Works only for Paper 1.21+)
+    Object item = Class.forName("org.bukkit.craftbukkit.inventory.CraftItemStack").getDeclaredMethod("asNMSCopy", ItemStack.class).invoke(null, itemStack);
 
-    Object nbtCompound = invokeMethod(nmsItemStack, "u");
-    if (nbtCompound != null) {
+    // net.minecraft.core.component.DataComponents.BLOCK_STATE
+    Object BLOCK_STATE = Class.forName("net.minecraft.core.component.DataComponents").getField("BLOCK_STATE").get(null);
 
-      Object blockState = invokeMethod(nbtCompound, "c", "BlockStateTag");
-      if (blockState != null) {
-        Object levl = invokeMethod(blockState, "c", "level");
-        return Integer.parseInt(levl.toString().replace("\"", ""));
-      }
+    // net.minecraft.core.component.DataComponentHolder.get(BLOCK_STATE) => net.minecraft.world.item.component.BlockItemStateProperties
+    Class<?> cDataComponentHolder = Class.forName("net.minecraft.core.component.DataComponentHolder");
+    Class<?> cDataComponentType = Class.forName("net.minecraft.core.component.DataComponentType");
+    Object blockState = cDataComponentHolder.getMethod("get", cDataComponentType).invoke(item, BLOCK_STATE);
+
+    if (blockState != null) {
+      // net.minecraft.world.level.block.state.properties.BlockStateProperties.LEVEL
+      Object levelProperty = Class.forName("net.minecraft.world.level.block.state.properties.BlockStateProperties").getField("LEVEL").get(null);
+
+      // net.minecraft.world.item.component.BlockItemStateProperties.get(Property)
+      Class<?> cProperty = Class.forName("net.minecraft.world.level.block.state.properties.Property");
+      return (Integer) blockState.getClass().getMethod("get", cProperty).invoke(blockState, levelProperty);
     }
     return null;
-  }
-
-  private Object invokeMethod(Object object, String method, Object... args) {
-    try {
-      return object.getClass().getMethod(method, fromObjectToClass(args)).invoke(object, args);
-    } catch (InvocationTargetException | IllegalAccessException | NoSuchMethodException e) {
-      e.printStackTrace();
-    }
-    return null;
-  }
-
-
-  private Class<?>[] fromObjectToClass(Object[] args) {
-    Class<?>[] classes = new Class<?>[0];
-
-    if (args != null) {
-      classes = new Class<?>[args.length];
-      for (int i = 0; i < args.length; i++) {
-        classes[i] = args[i].getClass();
-      }
-    }
-    return classes;
   }
 }
+
